@@ -1,10 +1,20 @@
-# student2.py
-# Module for Student 2: CSV parsing, validation, calculation algorithms, performance measurement, and error handling.
+import os
+import socket
 import csv
 import time
 import datetime
 from functools import wraps
 from collections import defaultdict
+
+# ← Ajouté : configuration du parallélisme entre conteneurs
+NUM_WORKERS = int(os.getenv("NUM_WORKERS", "1"))
+_host = socket.gethostname()
+try:
+    # Si hostname = projet_worker_3 → worker_id = 2
+    WORKER_ID = int(_host.rsplit("_", 1)[-1]) - 1
+except ValueError:
+    # fallback sur une variable d'env si nécessaire
+    WORKER_ID = int(os.getenv("WORKER_ID", "0"))
 
 class ValidationError(Exception):
     """Raised when a CSV row fails validation."""
@@ -30,32 +40,26 @@ def parse_csv(file_path, delimiter=','):
     :param delimiter: Field delimiter (default ',').
     :yields: dict representing each validated row.
     """
-    # Use utf-8-sig to handle BOM if present
     with open(file_path, newline='', encoding='utf-8-sig') as csvfile:
-        # Skip any blank lines to ensure correct header parsing
         lines = (line for line in csvfile if line.strip())
         reader = csv.DictReader(lines, delimiter=delimiter)
+        # Normalise header keys
+        reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
         for line_num, row in enumerate(reader, start=2):
             try:
-                yield validate_row(row)
+                yield validate_row({k.strip(): v for k, v in row.items()})
             except ValidationError as ve:
                 print(f"[ERROR] Line {line_num}: {ve}")
 
-
 def validate_row(row):
     """Validate and cast fields per schema."""
-    # Normalize keys
-    row = {k.strip(): v for k, v in row.items()}
-    # Mandatory string fields
     for key in ('transaction_id', 'date', 'ville', 'modele'):
         if not row.get(key) or not row[key].strip():
             raise ValidationError(f"Missing '{key}'")
-    # type
     t = row.get('type')
     if t not in ('vente', 'location'):
         raise ValidationError("Invalid 'type', must be 'vente' or 'location'")
     row['type'] = t
-    # prix
     try:
         price = float(row.get('prix', ''))
         if price < 0:
@@ -63,21 +67,19 @@ def validate_row(row):
         row['prix'] = price
     except ValueError:
         raise ValidationError("Invalid 'prix'")
-    # duree_location_mois
     if t == 'location':
         val = row.get('duree_location_mois')
         if not val or not val.strip():
             raise ValidationError("Missing 'duree_location_mois' for location")
         try:
-            duration = int(val)
-            if duration < 1:
+            d = int(val)
+            if d < 1:
                 raise ValidationError("'duree_location_mois' must be >= 1")
-            row['duree_location_mois'] = duration
+            row['duree_location_mois'] = d
         except ValueError:
             raise ValidationError("Invalid 'duree_location_mois'")
     else:
         row['duree_location_mois'] = None
-    # optional cost
     if 'cost' in row and row.get('cost') and row['cost'].strip():
         try:
             row['cost'] = float(row['cost'])
@@ -88,12 +90,10 @@ def validate_row(row):
 # 2. Calculation Algorithms
 @timed
 def calculate_total_revenue(rows):
-    """Total revenue."""
     return sum(r['prix'] for r in rows)
 
 @timed
 def revenue_by_modele(rows):
-    """Revenue per model."""
     rev = defaultdict(float)
     for r in rows:
         rev[r['modele']] += r['prix']
@@ -101,7 +101,6 @@ def revenue_by_modele(rows):
 
 @timed
 def revenue_by_ville(rows):
-    """Revenue per city."""
     rev = defaultdict(float)
     for r in rows:
         rev[r['ville']] += r['prix']
@@ -109,24 +108,20 @@ def revenue_by_ville(rows):
 
 @timed
 def average_duration_per_modele(rows):
-    """Avg rental duration per model."""
     total, count = defaultdict(int), defaultdict(int)
     for r in rows:
         if r['type'] == 'location':
-            m = r['modele']
-            total[m] += r['duree_location_mois']
-            count[m] += 1
+            total[r['modele']] += r['duree_location_mois']
+            count[r['modele']] += 1
     return {m: total[m]/count[m] for m in total}
 
 @timed
 def top_n(d, n=5):
-    """Top N entries sorted by value desc."""
     return sorted(d.items(), key=lambda x: x[1], reverse=True)[:n]
 
 # 3. Additional analyses
 @timed
 def top_models_by_city(rows, n=5):
-    """Top N models by number of transactions in each city."""
     counts = defaultdict(lambda: defaultdict(int))
     for r in rows:
         counts[r['ville']][r['modele']] += 1
@@ -134,7 +129,6 @@ def top_models_by_city(rows, n=5):
 
 @timed
 def monthly_revenue(rows):
-    """Total revenue per month (YYYY-MM)."""
     rev = defaultdict(float)
     for r in rows:
         dt = datetime.datetime.strptime(r['date'], "%Y-%m-%d")
@@ -144,13 +138,11 @@ def monthly_revenue(rows):
 
 @timed
 def average_rotation(rows):
-    """Overall avg rental duration."""
     durations = [r['duree_location_mois'] for r in rows if r['type']=='location']
     return sum(durations)/len(durations) if durations else 0
 
 @timed
 def average_margin_by_type_and_city(rows):
-    """Avg profit margin per transaction type and city."""
     sums = defaultdict(lambda: defaultdict(float))
     counts = defaultdict(lambda: defaultdict(int))
     for r in rows:
@@ -160,22 +152,21 @@ def average_margin_by_type_and_city(rows):
         margin = r['prix'] - cost
         sums[r['type']][r['ville']] += margin
         counts[r['type']][r['ville']] += 1
-    return {t: {city: sums[t][city]/counts[t][city] for city in sums[t]} for t in sums}
+    return {t: {city: sums[t][city]/counts[t][city]
+                for city in sums[t]} for t in sums}
 
 @timed
 def predict_trend(rows):
-    """Simple linear regression on monthly revenue to predict next month."""
     rev = monthly_revenue(rows)
-    months, values = list(rev.keys()), list(rev.values())
-    n = len(values)
-    x = list(range(n))
-    sum_x, sum_y = sum(x), sum(values)
-    sum_xy = sum(xi*yi for xi, yi in zip(x, values))
-    sum_x2 = sum(xi*xi for xi in x)
-    denom = n*sum_x2 - sum_x*sum_x
-    slope = (n*sum_xy - sum_x*sum_y)/denom if denom else 0
-    intercept = (sum_y - slope*sum_x)/n if n else 0
-    # next month key
+    months, vals = list(rev.keys()), list(rev.values())
+    n = len(vals)
+    xs = list(range(n))
+    sx, sy = sum(xs), sum(vals)
+    sxy = sum(x*y for x,y in zip(xs, vals))
+    sx2 = sum(x*x for x in xs)
+    denom = n*sx2 - sx*sx
+    slope = (n*sxy - sx*sy)/denom if denom else 0
+    intercept = (sy - slope*sx)/n if n else 0
     last = datetime.datetime.strptime(months[-1], "%Y-%m")
     year = last.year + (last.month // 12)
     month = last.month % 12 + 1
@@ -186,35 +177,42 @@ def predict_trend(rows):
 # 4. Main pipeline
 @timed
 def main_pipeline(file_path):
-    rows = list(parse_csv(file_path))
-    print(f"Processed {len(rows)} valid rows\n")
+    # ← Modifié : on ne garde que la part du CSV qui nous revient
+    all_rows = parse_csv(file_path)
+    rows = [r for idx, r in enumerate(all_rows) if idx % NUM_WORKERS == WORKER_ID]
+    print(f"[Worker {WORKER_ID+1}/{NUM_WORKERS}] Processing {len(rows)} rows\n")
 
     total = calculate_total_revenue(rows)
     print(f"Total revenue: {total:.2f}\n")
 
     by_modele = revenue_by_modele(rows)
     print("Top 5 modèles by revenue:")
-    for m, r in top_n(by_modele): print(f"  {m}: {r:.2f}")
+    for m, rev in top_n(by_modele):
+        print(f"  {m}: {rev:.2f}")
     print()
 
     by_ville = revenue_by_ville(rows)
     print("Revenue by city:")
-    for city, r in by_ville.items(): print(f"  {city}: {r:.2f}")
+    for city, rev in by_ville.items():
+        print(f"  {city}: {rev:.2f}")
     print()
 
     avg_dur = average_duration_per_modele(rows)
     print("Average rental duration per model (mois):")
-    for m, d in avg_dur.items(): print(f"  {m}: {d:.1f}")
+    for m, d in avg_dur.items():
+        print(f"  {m}: {d:.1f}")
     print()
 
     tops = top_models_by_city(rows)
     print("Top 5 modèles par ville:")
-    for city, lst in tops.items(): print(f"  {city}: {lst}")
+    for city, lst in tops.items():
+        print(f"  {city}: {lst}")
     print()
 
     m_rev = monthly_revenue(rows)
     print("Monthly revenue:")
-    for mon, r in m_rev.items(): print(f"  {mon}: {r:.2f}")
+    for mon, rev in m_rev.items():
+        print(f"  {mon}: {rev:.2f}")
     print()
 
     avg_rot = average_rotation(rows)
@@ -224,7 +222,8 @@ def main_pipeline(file_path):
     if margins:
         print("Average margin by type and city:")
         for t, cities in margins.items():
-            for city, m in cities.items(): print(f"  {t} - {city}: {m:.2f}")
+            for city, m in cities.items():
+                print(f"  {t} - {city}: {m:.2f}")
         print()
     else:
         print("No 'cost' field found; skip margin calculations.\n")

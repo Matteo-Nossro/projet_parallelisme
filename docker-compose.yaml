@@ -1,0 +1,8 @@
+services:
+  worker:
+    build: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NUM_WORKERS=6
+    # Le CMD vient du Dockerfile, pas besoin de le répéter ici
