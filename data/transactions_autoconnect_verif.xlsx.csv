@@ -1,0 +1,8 @@
+transaction_id;date;ville;type;modele;prix;duree_location_mois;;;;Total des revenus;180401,94;;;;;
+TX00001;24/09/2023;Paris;vente;Audi A4;59523,75;;;Audi A4;;Revenu par modèle : Audi A4;136472;;;;;2023-09
+TX00002;11/12/2023;Marseille;vente;Audi A4;16623,88;;;Paris;;Revenu par ville : Paris;102067,87;;;;;
+TX00003;24/05/2023;Paris;location;Peugeot 208;1468,10;18;;Peugeot 208;;Durée moyenne par modèle (locations seuls) Peugeot 208;12;;;;;
+TX00004;03/02/2023;Marseille;location;Peugeot 208;1385,82;6;;;;Revenu mensuel (YYYY-MM) mois de septembre;59523,75;;;;;
+TX00005;05/04/2024;Paris;location;Tesla Model 3;234,62;46;;;;Durée moyenne globale (locations);23,33333333;;;;;
+TX00006;07/11/2023;Marseille;vente;Audi A4;60324,37;;;;;;;;;;;
+TX00007;24/07/2023;Paris;vente;Mercedes C Class;40841,40;;;;;;;;;;;
