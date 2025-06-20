@@ -1,0 +1,8 @@
+transaction_id,date,ville,type,modele,prix,duree_location_mois
+TX00001,2023-09-24,Paris,vente,Audi A4,59523.75,
+TX00002,2023-12-11,Marseille,vente,Audi A4,16623.88,
+TX00003,2023-05-24,Paris,location,Peugeot 208,1468.1,18
+TX00004,2023-02-03,Marseille,location,Peugeot 208,1385.82,6
+TX00005,2024-04-05,Paris,location,Tesla Model 3,234.62,46
+TX00006,2023-11-07,Marseille,vente,Audi A4,60324.37,
+TX00007,2023-07-24,Paris,vente,Mercedes C Class,40841.4,
