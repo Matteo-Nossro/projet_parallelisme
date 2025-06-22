@@ -1,42 +1,77 @@
-version: "3.8"
-
 services:
-  # 1) Le scheduler Dask
-  scheduler:
-    image: daskdev/dask:latest
+  # Dask Scheduler
+  dask-scheduler:
+    build: .
+    container_name: dask-scheduler
     command: dask-scheduler
     ports:
-      - "8786:8786"   # port RPC
-      - "8787:8787"   # dashboard web
+      - "8786:8786"  # Port pour les workers
+      - "8787:8787"  # Dashboard web
     networks:
-      - dask-net
-
-  # 2) Les workers Dask
-  worker:
-    image: daskdev/dask:latest
-    command: dask-worker tcp://scheduler:8786
-    depends_on:
-      - scheduler
-    deploy:
-      replicas: 3     # change à 4 ou 6 selon ton envie
-    networks:
-      - dask-net
+      - dask-network
     environment:
-      # limite mémoire/cœurs si tu veux
-      - EXTRA_APT_PACKAGES=
-    # volumes: si tu utilises un volume pour partager les CSV
+      - DASK_SCHEDULER_ADDRESS=tcp://dask-scheduler:8786
 
-  # 3) Ton application, qui envoie le job
-  app:
+  # Dask Worker 1
+  dask-worker-1:
     build: .
+    container_name: dask-worker-1
+    command: dask-worker tcp://dask-scheduler:8786 --name worker-1 --nthreads 2 --memory-limit 2GB
     depends_on:
-      - scheduler
-      - worker
-    environment:
-      DASK_SCHEDULER_ADDRESS: "tcp://scheduler:8786"
+      - dask-scheduler
     networks:
-      - dask-net
+      - dask-network
+    environment:
+      - DASK_SCHEDULER_ADDRESS=tcp://dask-scheduler:8786
+    volumes:
+      - ./data:/app/data:ro
+
+  # Dask Worker 2
+  dask-worker-2:
+    build: .
+    container_name: dask-worker-2
+    command: dask-worker tcp://dask-scheduler:8786 --name worker-2 --nthreads 2 --memory-limit 2GB
+    depends_on:
+      - dask-scheduler
+    networks:
+      - dask-network
+    environment:
+      - DASK_SCHEDULER_ADDRESS=tcp://dask-scheduler:8786
+    volumes:
+      - ./data:/app/data:ro
+
+  # Dask Worker 3
+  dask-worker-3:
+    build: .
+    container_name: dask-worker-3
+    command: dask-worker tcp://dask-scheduler:8786 --name worker-3 --nthreads 2 --memory-limit 2GB
+    depends_on:
+      - dask-scheduler
+    networks:
+      - dask-network
+    environment:
+      - DASK_SCHEDULER_ADDRESS=tcp://dask-scheduler:8786
+    volumes:
+      - ./data:/app/data:ro
+
+  # Client - Application principale
+  client:
+    build: .
+    container_name: dask-client
+    command: python main.py
+    depends_on:
+      - dask-scheduler
+      - dask-worker-1
+      - dask-worker-2
+      - dask-worker-3
+    networks:
+      - dask-network
+    environment:
+      - DASK_SCHEDULER_ADDRESS=tcp://dask-scheduler:8786
+    volumes:
+      - ./data:/app/data:ro
+      - ./results:/app/results
 
 networks:
-  dask-net:
+  dask-network:
     driver: bridge
