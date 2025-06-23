@@ -1,0 +1,37 @@
+ville,modele,type,prix,transaction_id
+Paris,Audi A4,vente,15087186.96,293
+Marseille,Audi A4,vente,14399019.04,270
+Paris,Peugeot 208,location,255988.74,293
+Marseille,Peugeot 208,location,237818.78,277
+Paris,Tesla Model 3,location,242713.9,283
+Paris,Mercedes C Class,vente,14365601.77,280
+Marseille,Mercedes C Class,location,232918.59,270
+Lyon,Renault Clio,location,246416.17,289
+Lyon,BMW X3,vente,15501611.2,303
+Lyon,BMW X3,location,243369.86,274
+Lyon,Audi A4,vente,15121993.69,285
+Paris,Tesla Model 3,vente,14185584.09,273
+Paris,Renault Clio,location,229235.61000000002,257
+Paris,BMW X3,location,246345.61000000002,291
+Marseille,Peugeot 208,vente,16129246.25,300
+Marseille,Mercedes C Class,vente,13810418.62,265
+Lyon,Mercedes C Class,vente,12622696.27,241
+Lyon,Peugeot 208,vente,13090843.82,253
+Paris,Mercedes C Class,location,229203.13,278
+Lyon,Tesla Model 3,location,210851.16,255
+Paris,Audi A4,location,237727.96,283
+Lyon,Audi A4,location,215475.99,261
+Marseille,Tesla Model 3,location,206141.06,247
+Lyon,Peugeot 208,location,238010.15,266
+Paris,BMW X3,vente,14666404.68,281
+Lyon,Tesla Model 3,vente,13977585.06,267
+Marseille,Renault Clio,vente,15780975.15,300
+Paris,Renault Clio,vente,14319725.83,275
+Lyon,Mercedes C Class,location,221755.53,272
+Marseille,BMW X3,vente,16245167.75,306
+Marseille,BMW X3,location,227967.71,265
+Paris,Peugeot 208,vente,15834628.85,291
+Marseille,Renault Clio,location,219378.61,267
+Marseille,Tesla Model 3,vente,15398496.67,293
+Marseille,Audi A4,location,257574.09,310
+Lyon,Renault Clio,vente,14830393.92,286

@@ -1,0 +1,7 @@
+ville,type,prix,transaction_id
+Paris,vente,88459132.18,1693
+Marseille,vente,91763323.48,1734
+Paris,location,1441214.95,1685
+Marseille,location,1381798.84,1636
+Lyon,location,1375878.86,1617
+Lyon,vente,85145123.96,1635
