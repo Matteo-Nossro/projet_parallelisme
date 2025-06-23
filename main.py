@@ -193,11 +193,6 @@ def main():
     print("\nValidating data...")
     ddf_valid = ddf.map_partitions(validate_partition, meta=meta)
 
-    # 4. Définition des calculs - TOUS LES CALCULS REQUIS ET SUGGÉRÉS
-    print("\nDefining all required and suggested calculations...")
-
-    # ===== CALCULS REQUIS =====
-
     # 1. Chiffre d'affaires mensuel par ville (vente + location)
     monthly_revenue_by_city = (
         ddf_valid

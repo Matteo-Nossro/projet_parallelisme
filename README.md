@@ -27,3 +27,6 @@ docker-compose run --rm client
 - **Dashboard Dask** : http://localhost:8787
 - **Rapport d'analyse** : `results/analysis_report.txt`
 - **Logs du client** : `make client-logs`
+
+
+![img.png](img.png)

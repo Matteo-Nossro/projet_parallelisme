@@ -61,7 +61,7 @@ Lyon:
 
 3. PERFORMANCE COMPARATIVE INTER-VILLES
 --------------------------------------------------------------------------------
-  Marseille: 93,145,122.32€ (34.6% du total)
+  Marseille: 93,145,122.32€ (34.6%  du total)
   Paris: 89,900,347.13€ (33.3% du total)
   Lyon: 86,521,002.82€ (32.1% du total)
 
