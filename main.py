@@ -1,8 +1,7 @@
 import os
 import time
 import datetime
-from functools import wraps
-from collections import defaultdict
+import numpy as np
 
 import pandas as pd
 import dask.dataframe as dd
@@ -72,7 +71,6 @@ def validate_partition(df: pd.DataFrame) -> pd.DataFrame:
             print(f"[ERROR] Row {idx}: {e}")
 
     if not valid:
-        # Retourne un DataFrame vide avec les bonnes colonnes
         cols = [
             'transaction_id', 'date', 'ville',
             'modele', 'type', 'prix',
@@ -90,16 +88,14 @@ def validate_partition(df: pd.DataFrame) -> pd.DataFrame:
 
 @delayed
 def predict_trend_from_series(monthly_rev: dict):
-    """Prédiction de tendance simple."""
-    if not monthly_rev:
+    """Prédiction de tendance sur les 3 derniers mois."""
+    if not monthly_rev or len(monthly_rev) < 3:
         return "N/A", 0.0
 
-    months = list(monthly_rev.keys())
-    vals = list(monthly_rev.values())
+    # Prendre les 3 derniers mois
+    months = sorted(list(monthly_rev.keys()))[-3:]
+    vals = [monthly_rev[m] for m in months]
     n = len(vals)
-
-    if n < 2:
-        return months[-1] if months else "N/A", vals[-1] if vals else 0.0
 
     xs = list(range(n))
     sx, sy = sum(xs), sum(vals)
@@ -122,7 +118,6 @@ def wait_for_scheduler(scheduler_address, max_retries=30, delay=2):
     import socket
     import urllib.parse
 
-    # Parse l'adresse pour extraire host et port
     parsed = urllib.parse.urlparse(scheduler_address)
     host = parsed.hostname or 'dask-scheduler'
     port = parsed.port or 8786
@@ -152,12 +147,10 @@ def main():
     # 1. Configuration du client Dask
     scheduler_address = os.environ.get('DASK_SCHEDULER_ADDRESS', 'tcp://dask-scheduler:8786')
 
-    # Attendre que le scheduler soit prêt
     if not wait_for_scheduler(scheduler_address):
         print("ERROR: Could not connect to Dask scheduler!")
         return
 
-    # Connexion au cluster Dask
     print(f"Connecting to Dask cluster at {scheduler_address}")
     client = Client(scheduler_address)
     print(f"Connected! Dashboard link: {client.dashboard_link}")
@@ -180,7 +173,7 @@ def main():
             'duree_location_mois': 'float64',
             'cost': 'float64'
         },
-        blocksize='64MB'  # Ajuster selon la taille du fichier
+        blocksize='64MB'
     )
 
     print(f"Number of partitions: {ddf.npartitions}")
@@ -200,154 +193,336 @@ def main():
     print("\nValidating data...")
     ddf_valid = ddf.map_partitions(validate_partition, meta=meta)
 
-    # 4. Définition des calculs
-    print("\nDefining calculations...")
+    # 4. Définition des calculs - TOUS LES CALCULS REQUIS ET SUGGÉRÉS
+    print("\nDefining all required and suggested calculations...")
 
-    # Total revenue
-    total_rev = ddf_valid['prix'].sum()
+    # ===== CALCULS REQUIS =====
 
-    # Revenue by model
-    rev_by_modele = ddf_valid.groupby('modele')['prix'].sum()
-
-    # Revenue by city
-    rev_by_ville = ddf_valid.groupby('ville')['prix'].sum()
-
-    # Average rental duration
-    locs = ddf_valid[ddf_valid['type'] == 'location']
-    avg_duration = locs.groupby('modele')['duree_location_mois'].mean()
-
-    # Count by type
-    count_by_type = ddf_valid.groupby('type').size()
-
-    # Top 5 models by city
-    top_models_by_city = (
+    # 1. Chiffre d'affaires mensuel par ville (vente + location)
+    monthly_revenue_by_city = (
         ddf_valid
-        .groupby(['ville', 'modele'])['prix']
+        .assign(month=ddf_valid['date'].dt.strftime("%Y-%m"))
+        .groupby(['month', 'ville'])['prix']
         .sum()
         .reset_index()
     )
 
-    # 5. Exécution avec mesure de temps individuelle
-    print("\n" + "="*60)
-    print("STARTING DISTRIBUTED CALCULATIONS")
-    print("="*60)
+    # 2. Répartition vente/location par ville
+    type_distribution_by_city = (
+        ddf_valid
+        .groupby(['ville', 'type'])
+        .agg({'prix': 'sum', 'transaction_id': 'count'})
+        .reset_index()
+    )
+
+    # 3. Performance comparative inter-villes
+    city_performance = ddf_valid.groupby('ville').agg({
+        'prix': ['sum', 'mean', 'count'],
+        'transaction_id': 'count'
+    })
+
+    # ===== CALCULS SUPPLÉMENTAIRES =====
+
+    # 4. Top 5 des modèles par ville (ventes ET locations)
+    top_models_by_city = (
+        ddf_valid
+        .groupby(['ville', 'modele', 'type'])
+        .agg({'prix': 'sum', 'transaction_id': 'count'})
+        .reset_index()
+    )
+
+    # 5. Analyse de saisonnalité
+    monthly_revenue = (
+        ddf_valid
+        .assign(month=ddf_valid['date'].dt.strftime("%Y-%m"))
+        .groupby('month')['prix']
+        .agg(['sum', 'count', 'mean'])
+        .reset_index()
+    )
+
+    # 6. Temps moyen de rotation (durée moyenne de location)
+    avg_rental_duration = (
+        ddf_valid[ddf_valid['type'] == 'location']
+        .groupby(['ville', 'modele'])['duree_location_mois']
+        .agg(['mean', 'std', 'count'])
+        .reset_index()
+    )
+
+    # 7. Marge bénéficiaire (si cost est disponible)
+    profit_margins = ddf_valid.copy()
+    profit_margins['margin'] = profit_margins['prix'] - profit_margins['cost'].fillna(0)
+    profit_margins['margin_rate'] = (profit_margins['margin'] / profit_margins['prix'] * 100).fillna(0)
+
+    margin_by_type_city = profit_margins.groupby(['ville', 'type']).agg({
+        'margin': ['sum', 'mean'],
+        'margin_rate': 'mean'
+    })
+
+    # ===== CALCULS ADDITIONNELS =====
 
     # Total revenue
-    t0 = time.perf_counter()
-    total = total_rev.compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] total_rev.compute() took {t1-t0:.4f}s")
-    print(f"Total Revenue: {total:,.2f}€")
+    total_rev = ddf_valid['prix'].sum()
 
-    # Revenue by model
-    t0 = time.perf_counter()
-    by_mod = rev_by_modele.compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] rev_by_modele.compute() took {t1-t0:.4f}s")
-    print("Revenue by Model:")
-    for model, revenue in by_mod.sort_values(ascending=False).head(10).items():
-        print(f"  {model}: {revenue:,.2f}€")
+    # Revenue by model (global)
+    rev_by_modele = ddf_valid.groupby('modele')['prix'].sum()
 
-    # Revenue by city
-    t0 = time.perf_counter()
-    by_city = rev_by_ville.compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] rev_by_ville.compute() took {t1-t0:.4f}s")
-    print("Revenue by City:")
-    for city, revenue in by_city.sort_values(ascending=False).items():
-        print(f"  {city}: {revenue:,.2f}€")
-
-    # Average rental duration
-    t0 = time.perf_counter()
-    avg_dur = avg_duration.compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] avg_duration.compute() took {t1-t0:.4f}s")
-    print("Average Rental Duration by Model:")
-    for model, duration in avg_dur.sort_values(ascending=False).head(10).items():
-        print(f"  {model}: {duration:.1f} months")
+    # Revenue by city (global)
+    rev_by_ville = ddf_valid.groupby('ville')['prix'].sum()
 
     # Count by type
-    t0 = time.perf_counter()
-    type_counts = count_by_type.compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] count_by_type.compute() took {t1-t0:.4f}s")
-    print("Transaction Count by Type:")
-    for t_type, count in type_counts.items():
-        print(f"  {t_type}: {count:,} transactions")
+    count_by_type = ddf_valid.groupby('type').size()
 
-    # 6. Prévision de tendance avec mesures
+    # 5. Exécution avec mesure de temps
+    print("\n" + "="*60)
+    print("STARTING ALL DISTRIBUTED CALCULATIONS")
+    print("="*60)
+
+    results = {}
+
+    # CALCULS REQUIS
+    print("\n--- CALCULS REQUIS ---")
+
+    # 1. CA mensuel par ville
+    t0 = time.perf_counter()
+    monthly_by_city = monthly_revenue_by_city.compute()
+    t1 = time.perf_counter()
+    print(f"\n[PERF] Monthly revenue by city: {t1-t0:.4f}s")
+    results['monthly_revenue_by_city'] = monthly_by_city
+
+    # 2. Répartition vente/location par ville
+    t0 = time.perf_counter()
+    type_dist = type_distribution_by_city.compute()
+    t1 = time.perf_counter()
+    print(f"[PERF] Type distribution by city: {t1-t0:.4f}s")
+    results['type_distribution'] = type_dist
+
+    # 3. Performance comparative
+    t0 = time.perf_counter()
+    city_perf = city_performance.compute()
+    t1 = time.perf_counter()
+    print(f"[PERF] City performance comparison: {t1-t0:.4f}s")
+    results['city_performance'] = city_perf
+
+    # CALCULS SUPPLÉMENTAIRES
+    print("\n--- CALCULS SUPPLÉMENTAIRES ---")
+
+    # 4. Top 5 modèles par ville
+    t0 = time.perf_counter()
+    top_models = top_models_by_city.compute()
+    t1 = time.perf_counter()
+    print(f"\n[PERF] Top models by city: {t1-t0:.4f}s")
+    results['top_models'] = top_models
+
+    # 5. Analyse mensuelle (saisonnalité)
+    t0 = time.perf_counter()
+    monthly_analysis = monthly_revenue.compute()
+    t1 = time.perf_counter()
+    print(f"[PERF] Monthly analysis: {t1-t0:.4f}s")
+    results['monthly_analysis'] = monthly_analysis
+
+    # 6. Durée moyenne de location
+    t0 = time.perf_counter()
+    rental_duration = avg_rental_duration.compute()
+    t1 = time.perf_counter()
+    print(f"[PERF] Rental duration analysis: {t1-t0:.4f}s")
+    results['rental_duration'] = rental_duration
+
+    # 7. Marges bénéficiaires
+    t0 = time.perf_counter()
+    margins = margin_by_type_city.compute()
+    t1 = time.perf_counter()
+    print(f"[PERF] Profit margins: {t1-t0:.4f}s")
+    results['profit_margins'] = margins
+
+    # Calculs globaux
+    t0 = time.perf_counter()
+    total = total_rev.compute()
+    by_city = rev_by_ville.compute()
+    by_model = rev_by_modele.compute()
+    by_type = count_by_type.compute()
+    t1 = time.perf_counter()
+    print(f"[PERF] Global calculations: {t1-t0:.4f}s")
+
+    # 6. Affichage des résultats
+    print("\n" + "="*60)
+    print("RESULTS SUMMARY")
+    print("="*60)
+
+    print(f"\nTOTAL REVENUE: {total:,.2f}€")
+
+    print("\n1. CHIFFRE D'AFFAIRES MENSUEL PAR VILLE:")
+    pivot_monthly = monthly_by_city.pivot(index='month', columns='ville', values='prix').fillna(0)
+    for month in sorted(pivot_monthly.index)[-6:]:  # 6 derniers mois
+        print(f"\n{month}:")
+        for city in pivot_monthly.columns:
+            print(f"  {city}: {pivot_monthly.loc[month, city]:,.2f}€")
+
+    print("\n2. RÉPARTITION VENTE/LOCATION PAR VILLE:")
+    for ville in type_dist['ville'].unique():
+        ville_data = type_dist[type_dist['ville'] == ville]
+        print(f"\n{ville}:")
+        total_ville = ville_data['prix'].sum()
+        for _, row in ville_data.iterrows():
+            pct = (row['prix'] / total_ville * 100) if total_ville > 0 else 0
+            print(f"  {row['type']}: {row['prix']:,.2f}€ ({pct:.1f}%) - {row['transaction_id']} transactions")
+
+    print("\n3. PERFORMANCE COMPARATIVE INTER-VILLES:")
+    city_perf.columns = ['_'.join(col).strip() if col[1] else col[0] for col in city_perf.columns.values]
+    for city, row in city_perf.iterrows():
+        print(f"\n{city}:")
+        print(f"  Total: {row['prix_sum']:,.2f}€")
+        print(f"  Moyenne: {row['prix_mean']:,.2f}€")
+        print(f"  Nombre: {int(row['prix_count'])} transactions")
+
+    print("\n4. TOP 5 MODÈLES PAR VILLE:")
+    for ville in top_models['ville'].unique():
+        ville_models = top_models[top_models['ville'] == ville]
+        top_5 = ville_models.groupby('modele')['prix'].sum().nlargest(5)
+        print(f"\n{ville}:")
+        for i, (model, revenue) in enumerate(top_5.items(), 1):
+            print(f"  {i}. {model}: {revenue:,.2f}€")
+
+    print("\n5. ANALYSE DE SAISONNALITÉ:")
+    print("Variation mensuelle du CA:")
+    monthly_sorted = monthly_analysis.sort_values('month')
+    for _, row in monthly_sorted.tail(12).iterrows():  # 12 derniers mois
+        print(f"  {row['month']}: {row['sum']:,.2f}€ ({row['count']} transactions, moy: {row['mean']:,.2f}€)")
+
+    # Calcul de la variation
+    if len(monthly_sorted) >= 2:
+        revenues = monthly_sorted['sum'].values
+        variations = [(revenues[i] - revenues[i-1]) / revenues[i-1] * 100
+                      for i in range(1, len(revenues))]
+        avg_variation = np.mean(variations) if variations else 0
+        print(f"\nVariation moyenne mensuelle: {avg_variation:+.1f}%")
+
+    print("\n6. TEMPS MOYEN DE ROTATION (DURÉE LOCATION):")
+    avg_duration_global = rental_duration['mean'].mean()
+    print(f"Durée moyenne globale: {avg_duration_global:.1f} mois")
+    print("\nPar ville:")
+    for ville in rental_duration['ville'].unique():
+        ville_dur = rental_duration[rental_duration['ville'] == ville]
+        avg_ville = ville_dur['mean'].mean()
+        print(f"  {ville}: {avg_ville:.1f} mois")
+
+    print("\n7. MARGES BÉNÉFICIAIRES:")
+    if not margins.empty:
+        margins.columns = ['_'.join(col).strip() if col[1] else col[0] for col in margins.columns.values]
+        for (ville, type_), row in margins.iterrows():
+            print(f"\n{ville} - {type_}:")
+            print(f"  Marge totale: {row.get('margin_sum', 0):,.2f}€")
+            print(f"  Marge moyenne: {row.get('margin_mean', 0):,.2f}€")
+            print(f"  Taux de marge: {row.get('margin_rate_mean', 0):.1f}%")
+
+    # 7. Prédiction de tendance
     print("\n" + "="*60)
     print("TREND PREDICTION")
     print("="*60)
 
-    # a) calcul du CA mensuel
-    monthly = (
-        ddf_valid
-        .assign(month=ddf_valid['date'].dt.strftime("%Y-%m"))
-        .groupby('month')['prix']
-        .sum()
-    )
-
+    monthly_total = monthly_analysis.set_index('month')['sum'].to_dict()
     t0 = time.perf_counter()
-    monthly_series = monthly.compute()
+    next_month, forecast = predict_trend_from_series(monthly_total).compute()
     t1 = time.perf_counter()
-    print(f"\n[PERF] monthly.compute() took {t1-t0:.4f}s")
-    print("Monthly Revenue:")
-    for month, revenue in monthly_series.sort_index().tail(6).items():
-        print(f"  {month}: {revenue:,.2f}€")
+    print(f"\n[PERF] Trend prediction: {t1-t0:.4f}s")
+    print(f"Prévision pour {next_month}: {forecast:,.2f}€")
 
-    # b) prédiction
-    t0 = time.perf_counter()
-    next_month, forecast = predict_trend_from_series(monthly_series.to_dict()).compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] predict_trend.compute() took {t1-t0:.4f}s")
-    print(f"Forecast for {next_month}: {forecast:,.2f}€")
-
-    # 7. Top 5 models by city
+    # 8. Sauvegarde du rapport complet
     print("\n" + "="*60)
-    print("TOP 5 MODELS BY CITY")
-    print("="*60)
-
-    t0 = time.perf_counter()
-    top_models_computed = top_models_by_city.compute()
-    t1 = time.perf_counter()
-    print(f"\n[PERF] top_models_by_city.compute() took {t1-t0:.4f}s")
-
-    for city in top_models_computed['ville'].unique():
-        city_data = top_models_computed[top_models_computed['ville'] == city]
-        top_5 = city_data.nlargest(5, 'prix')
-        print(f"\nTop 5 models in {city}:")
-        for _, row in top_5.iterrows():
-            print(f"  {row['modele']}: {row['prix']:,.2f}€")
-
-    # 8. Sauvegarde des résultats
-    print("\n" + "="*60)
-    print("SAVING RESULTS")
+    print("SAVING COMPLETE REPORT")
     print("="*60)
 
     results_dir = "/app/results"
     os.makedirs(results_dir, exist_ok=True)
 
-    # Sauvegarder un rapport
-    report_path = os.path.join(results_dir, "analysis_report.txt")
+    report_path = os.path.join(results_dir, "complete_analysis_report.txt")
     with open(report_path, 'w') as f:
-        f.write("AUTOCONNECT SOLUTIONS - DISTRIBUTED ANALYSIS REPORT\n")
-        f.write("="*60 + "\n\n")
-        f.write(f"Analysis Date: {datetime.datetime.now()}\n")
-        f.write(f"Total Revenue: {total:,.2f}€\n\n")
+        f.write("AUTOCONNECT SOLUTIONS - RAPPORT D'ANALYSE DISTRIBUÉ COMPLET\n")
+        f.write("="*80 + "\n")
+        f.write(f"Date d'analyse: {datetime.datetime.now()}\n")
+        f.write(f"Architecture: Dask Distributed Computing\n")
+        f.write("="*80 + "\n\n")
 
-        f.write("Revenue by City:\n")
+        f.write("RÉSUMÉ EXÉCUTIF\n")
+        f.write("-"*80 + "\n")
+        f.write(f"Chiffre d'affaires total: {total:,.2f}€\n")
+        f.write(f"Nombre de villes: {len(by_city)}\n")
+        f.write(f"Nombre de modèles: {len(by_model)}\n")
+        f.write(f"Prévision mois prochain ({next_month}): {forecast:,.2f}€\n\n")
+
+        f.write("1. CHIFFRE D'AFFAIRES MENSUEL PAR VILLE\n")
+        f.write("-"*80 + "\n")
+        for month in sorted(pivot_monthly.index)[-6:]:
+            f.write(f"\n{month}:\n")
+            for city in pivot_monthly.columns:
+                f.write(f"  {city}: {pivot_monthly.loc[month, city]:,.2f}€\n")
+
+        f.write("\n2. RÉPARTITION VENTE/LOCATION PAR VILLE\n")
+        f.write("-"*80 + "\n")
+        for ville in type_dist['ville'].unique():
+            ville_data = type_dist[type_dist['ville'] == ville]
+            f.write(f"\n{ville}:\n")
+            total_ville = ville_data['prix'].sum()
+            for _, row in ville_data.iterrows():
+                pct = (row['prix'] / total_ville * 100) if total_ville > 0 else 0
+                f.write(f"  {row['type']}: {row['prix']:,.2f}€ ({pct:.1f}%)\n")
+
+        f.write("\n3. PERFORMANCE COMPARATIVE INTER-VILLES\n")
+        f.write("-"*80 + "\n")
         for city, revenue in by_city.sort_values(ascending=False).items():
-            f.write(f"  {city}: {revenue:,.2f}€\n")
+            pct = (revenue / total * 100) if total > 0 else 0
+            f.write(f"  {city}: {revenue:,.2f}€ ({pct:.1f}% du total)\n")
 
-        f.write(f"\nForecast for {next_month}: {forecast:,.2f}€\n")
+        f.write("\n4. TOP 5 MODÈLES PAR VILLE\n")
+        f.write("-"*80 + "\n")
+        for ville in top_models['ville'].unique():
+            ville_models = top_models[top_models['ville'] == ville]
+            top_5 = ville_models.groupby('modele')['prix'].sum().nlargest(5)
+            f.write(f"\n{ville}:\n")
+            for i, (model, revenue) in enumerate(top_5.items(), 1):
+                f.write(f"  {i}. {model}: {revenue:,.2f}€\n")
 
-    print(f"Report saved to: {report_path}")
+        f.write("\n5. ANALYSE DE SAISONNALITÉ\n")
+        f.write("-"*80 + "\n")
+        f.write("Évolution mensuelle (12 derniers mois):\n")
+        for _, row in monthly_sorted.tail(12).iterrows():
+            f.write(f"  {row['month']}: {row['sum']:,.2f}€\n")
 
-    # Fermer le client
-    print("\nClosing Dask client...")
+        f.write("\n6. DURÉE MOYENNE DE LOCATION\n")
+        f.write("-"*80 + "\n")
+        f.write(f"Moyenne globale: {avg_duration_global:.1f} mois\n")
+        for ville in rental_duration['ville'].unique():
+            ville_dur = rental_duration[rental_duration['ville'] == ville]
+            avg_ville = ville_dur['mean'].mean()
+            f.write(f"  {ville}: {avg_ville:.1f} mois\n")
+
+        f.write("\n7. MARGES BÉNÉFICIAIRES\n")
+        f.write("-"*80 + "\n")
+        if not margins.empty:
+            for (ville, type_), row in margins.iterrows():
+                f.write(f"\n{ville} - {type_}:\n")
+                f.write(f"  Taux de marge moyen: {row.get('margin_rate_mean', 0):.1f}%\n")
+
+        f.write("\n" + "="*80 + "\n")
+        f.write("Rapport généré avec succès\n")
+
+    print(f"Rapport complet sauvegardé: {report_path}")
+
+    # Sauvegarder aussi les données en CSV pour analyse ultérieure
+    csv_dir = os.path.join(results_dir, "csv_exports")
+    os.makedirs(csv_dir, exist_ok=True)
+
+    # Export des principaux résultats
+    monthly_by_city.to_csv(os.path.join(csv_dir, "monthly_revenue_by_city.csv"), index=False)
+    type_dist.to_csv(os.path.join(csv_dir, "type_distribution_by_city.csv"), index=False)
+    top_models.to_csv(os.path.join(csv_dir, "top_models_by_city.csv"), index=False)
+    monthly_analysis.to_csv(os.path.join(csv_dir, "monthly_analysis.csv"), index=False)
+    rental_duration.to_csv(os.path.join(csv_dir, "rental_duration_analysis.csv"), index=False)
+
+    print(f"Fichiers CSV exportés dans: {csv_dir}")
+
+    print("\nFermeture du client Dask...")
     client.close()
-    print("Done!")
+    print("Analyse terminée avec succès!")
 
 if __name__ == "__main__":
     main()
